@@ -13,10 +13,13 @@ DinnerCamは、日々の料理の悩みを解決するために開発されたAI
 ### 🎯 主な特徴
 
 - **🔍 画像認識**: Google Vertex AI (Gemini Vision)による高精度な食材認識
-- **🤖 マルチエージェント**: 専門性を持つ5つのAIエージェントが協調動作
+- **🤖 マルチエージェント**: 専門性を持つ6つのAIエージェントが協調動作
+- **🔐 ユーザー認証**: Google OAuth 2.0によるセキュアなログイン
+- **👤 個人プロファイル**: 食事制限・調理スキル・健康目標の詳細管理
 - **💬 自然な対話**: ChatGPTライクなチャット形式のユーザーインターフェース
 - **🎨 手順画像生成**: 調理手順の視覚的説明画像を自動生成
 - **📊 栄養分析**: 詳細な栄養成分分析とヘルス提案
+- **💾 データ永続化**: Firebase/Firestoreによる会話履歴・設定保存
 - **📱 レスポンシブデザイン**: スマートフォン・タブレット・PC対応
 
 ## 🚀 主な機能
@@ -47,6 +50,12 @@ DinnerCamは、日々の料理の悩みを解決するために開発されたAI
 - 意図理解に基づく適切なレスポンス
 - 会話履歴を考慮した文脈理解
 
+### 6. パーソナライゼーション 👤
+- **ユーザープロファイル**: 食事制限、アレルギー、調理スキルレベル
+- **健康目標管理**: カロリー目標、栄養素目標の設定
+- **学習機能**: レシピフィードバックによるレコメンデーション改善
+- **調理履歴**: 過去の料理体験を記録・分析
+
 ## 🏗️ アプリケーション構成
 
 ### システムアーキテクチャ
@@ -68,6 +77,7 @@ graph TD
     A[User Input] --> B[ChatAgent<br/>意図理解・会話管理]
     B --> C[VisionAgent<br/>画像解析・食材抽出]
     B --> D[RecipeAgent<br/>レシピ生成]
+    B --> H[ProfileExtractionAgent<br/>プロファイル抽出・管理]
     D --> E[NutritionAgent<br/>栄養分析]
     D --> F[GenerateImageAgent<br/>手順画像生成]
     G[Orchestrator<br/>エージェント統合管理] --> B
@@ -75,6 +85,9 @@ graph TD
     G --> D
     G --> E
     G --> F
+    G --> H
+    I[Firebase/Firestore<br/>データ永続化] --> G
+    J[Google OAuth<br/>認証システム] --> G
 ```
 
 ### 📂 プロジェクト構造
@@ -84,11 +97,19 @@ dinnercam-ai-agents/
 ├── frontend/                  # React フロントエンド
 │   ├── src/
 │   │   ├── components/       # UIコンポーネント
-│   │   │   ├── ChatMessage.jsx
-│   │   │   ├── ChatInput.jsx
-│   │   │   ├── IngredientCheck.jsx
-│   │   │   └── RecipeDisplay.jsx
+│   │   │   ├── AdminPanel.jsx      # 管理者パネル
+│   │   │   ├── ChatMessage.jsx     # チャットメッセージ
+│   │   │   ├── ChatInput.jsx       # チャット入力
+│   │   │   ├── IngredientCheck.jsx # 食材選択
+│   │   │   ├── LoginPage.jsx       # ログインページ
+│   │   │   ├── ProfileSettings.jsx # プロファイル設定
+│   │   │   ├── RecipeDisplay.jsx   # レシピ表示
+│   │   │   ├── UploadForm.jsx      # ファイルアップロード
+│   │   │   └── UserMenu.jsx        # ユーザーメニュー
+│   │   ├── contexts/        # React Context
+│   │   │   └── AuthContext.jsx     # 認証コンテキスト
 │   │   ├── utils/           # ユーティリティ
+│   │   │   └── progressive-timeout.js # プログレッシブタイムアウト
 │   │   ├── App.jsx          # メインアプリケーション
 │   │   └── main.jsx
 │   ├── package.json
@@ -99,11 +120,19 @@ dinnercam-ai-agents/
 │   │   ├── vision_agent.py         # 画像解析・食材抽出
 │   │   ├── recipe_agent.py         # レシピ生成
 │   │   ├── nutrition_agent.py      # 栄養分析
-│   │   └── generate_image_agent.py # 手順画像生成
+│   │   ├── generate_image_agent.py # 手順画像生成
+│   │   └── profile_extraction_agent.py # プロファイル抽出
+│   ├── models/              # データモデル
+│   │   └── user_profile.py         # ユーザープロファイル定義
+│   ├── services/            # サービスレイヤー
+│   │   └── profile_storage.py      # プロファイル永続化
 │   ├── orchestrator/        # エージェント統合
 │   │   └── handler.py
 │   ├── app/
 │   │   └── main.py          # FastAPIアプリケーション
+│   ├── auth.py              # 認証システム
+│   ├── conversation_storage.py     # 会話履歴管理
+│   ├── rate_limiter.py      # レート制限
 │   └── requirements.txt
 ├── docs/                    # ドキュメント
 └── README.md
@@ -116,6 +145,8 @@ dinnercam-ai-agents/
 - **Node.js**: v18.0.0 以上
 - **Python**: 3.9 以上
 - **Google Cloud Platform**: アカウント
+- **Firebase**: プロジェクト（認証・Firestore用）
+- **Google OAuth**: クライアントID取得
 - **Docker**: 最新版（本番デプロイ用）
 - **Git**: 最新版
 - **WSL2** (Windows環境の場合)
@@ -132,6 +163,8 @@ dinnercam-ai-agents/
 6. **プロジェクトIDをメモ**（例：`dinnercam-ai-123456`）
 
 **⚠️ 重要:** プロジェクトIDは自動生成される数字が付くため、必ず確認してメモしてください。
+
+**💡 ヒント:** 後でFirebaseプロジェクトでも同じプロジェクトIDを使用するため、統一しておくと管理が楽になります。
 
 ### 2. リポジトリのクローンとプロジェクトID設定
 
@@ -171,9 +204,28 @@ PROJECT_ID = "ntr-dinnercam-461613"
 PROJECT_ID = "dinnercam-ai-123456"
 ```
 
-### 3. Google Cloud Platform設定
+### 3. Firebaseプロジェクト作成
 
-#### 3.1 Google Cloud CLIインストール
+#### 3.1 Firebaseプロジェクトセットアップ
+
+1. [Firebase Console](https://console.firebase.google.com/) にアクセス
+2. 「プロジェクトを作成」で新しいプロジェクトを作成
+3. **Authentication** を有効化
+   - Authentication > Sign-in method で Google を有効化  
+4. **Firestore Database** を作成
+   - テストモードで開始（後でセキュリティルール設定）
+5. **Google OAuth クライアントID** を取得
+   - Authentication > Settings > 承認されたドメインに `localhost:5173` を追加
+
+#### 3.2 サービスアカウントキー取得
+
+1. Firebase Console > プロジェクト設定 > サービスアカウント
+2. 「新しい秘密鍵の生成」でJSONキーをダウンロード
+3. `backend/key/firebase-key.json` として保存
+
+### 4. Google Cloud Platform設定
+
+#### 4.1 Google Cloud CLIインストール
 
 **macOS:**
 ```bash
@@ -201,7 +253,7 @@ curl https://sdk.cloud.google.com | bash
 exec -l $SHELL
 ```
 
-#### 3.2 認証とプロジェクト設定
+#### 4.2 認証とプロジェクト設定
 
 ```bash
 # Google Cloudにログイン
@@ -218,7 +270,7 @@ gcloud config set project $PROJECT_ID
 gcloud config get-value project
 ```
 
-#### 3.3 必要なAPIの有効化
+#### 4.3 必要なAPIの有効化
 
 ```bash
 # Vertex AI API
@@ -246,7 +298,7 @@ gcloud services list --enabled
 4. 「Gemini API」で検索
 5. 「Generative Language API」を選択して「有効にする」
 
-#### 3.4 Google AI Studio APIキー取得（重要）
+#### 4.4 Google AI Studio APIキー取得（重要）
 
 1. [Google AI Studio](https://aistudio.google.com/) にアクセス
 2. 「Get API Key」をクリック
@@ -254,9 +306,9 @@ gcloud services list --enabled
 4. APIキーを生成・コピー
 5. 後ほど環境変数として設定
 
-### 4. バックエンド設定
+### 5. バックエンド設定
 
-#### 4.1 Python環境準備
+#### 5.1 Python環境準備
 
 ```bash
 cd backend
@@ -272,7 +324,7 @@ source venv/bin/activate
 # venv\Scripts\activate
 ```
 
-#### 4.2 依存関係インストール
+#### 5.2 依存関係インストール
 
 ```bash
 # .envファイル読み込み用パッケージを追加
@@ -285,7 +337,7 @@ pip install -r requirements.txt
 pip list
 ```
 
-#### 4.3 main.pyの修正（重要）
+#### 5.3 main.pyの修正（重要）
 
 **`backend/app/main.py`の先頭に以下を追加:**
 
@@ -310,7 +362,7 @@ from agents.vision_agent import extract_ingredients_from_image
 # ... 以下既存のimport
 ```
 
-#### 4.4 環境変数設定
+#### 5.4 環境変数設定
 
 **`.env`ファイルを作成** (`backend/.env`):
 
@@ -328,6 +380,13 @@ IMAGE_MODEL_NAME=gemini-2.0-flash-preview-image-generation
 
 # Google AI Studio APIキー（重要）
 GOOGLE_API_KEY=your-google-ai-studio-api-key-here
+
+# Google OAuth設定（重要）
+GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+JWT_SECRET_KEY=your-jwt-secret-key-here
+
+# Firebase設定
+FIREBASE_CREDENTIALS_PATH=./key/firebase-key.json
 
 # アプリケーション設定
 CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000"]
@@ -374,17 +433,20 @@ UPLOAD_DIR=uploads
 **⚠️ 必須編集項目:**
 - `PROJECT_ID`: あなたのGCPプロジェクトID
 - `GOOGLE_API_KEY`: Google AI StudioのAPIキー
+- `GOOGLE_CLIENT_ID`: Google OAuthクライアントID
+- `JWT_SECRET_KEY`: JWT署名用秘密鍵
+- `FIREBASE_CREDENTIALS_PATH`: Firebaseサービスアカウントキーパス
 
-#### 4.5 アップロードディレクトリ作成
+#### 5.5 アップロードディレクトリ作成
 
 ```bash
 # backend/uploadsディレクトリ作成
 mkdir -p backend/uploads
 ```
 
-### 5. フロントエンド設定
+### 6. フロントエンド設定
 
-#### 5.1 Node.js依存関係インストール
+#### 6.1 Node.js依存関係インストール
 
 ```bash
 cd frontend
@@ -396,7 +458,7 @@ npm install
 npm list
 ```
 
-#### 5.2 環境変数設定
+#### 6.2 環境変数設定
 
 **`.env.local`ファイルを作成** (`frontend/.env.local`):
 
@@ -424,9 +486,9 @@ code frontend/.env.local
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
-### 6. ローカル開発環境起動
+### 7. ローカル開発環境起動
 
-#### 6.1 バックエンド起動
+#### 7.1 バックエンド起動
 
 ```bash
 cd backend
@@ -463,7 +525,7 @@ curl http://localhost:8000/
    python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.getenv('PROJECT_ID'))"
    ```
 
-#### 6.2 フロントエンド起動
+#### 7.2 フロントエンド起動
 
 ```bash
 # 新しいターミナルで
@@ -476,7 +538,7 @@ npm run dev
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-#### 6.3 アクセス確認
+#### 7.3 アクセス確認
 
 - **フロントエンド**: http://localhost:5173
 - **バックエンドAPI**: http://localhost:8000
@@ -485,12 +547,13 @@ npm run dev -- --host 0.0.0.0 --port 5173
 
 **🧪 動作テスト:**
 1. フロントエンドにアクセス
-2. 「鶏肉でカレー作って」と入力
-3. AIエージェントが応答すれば成功！
+2. Googleアカウントでログイン
+3. 「鶏肉でカレー作って」と入力
+4. AIエージェントが応答すれば成功！
 
-### 7. 本番環境デプロイ（Google Cloud Run）
+### 8. 本番環境デプロイ
 
-#### 7.1 Docker設定
+#### 8.1 バックエンドデプロイ（Google Cloud Run）
 
 **Dockerfileの準備** (`backend/Dockerfile`):
 
@@ -519,7 +582,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 ```
 
-#### 7.2 バックエンドデプロイ
+**Docker設定** (`backend/Dockerfile`):
 
 ```bash
 cd backend
@@ -547,7 +610,25 @@ gcloud run deploy dinnercam-backend \
 gcloud run services describe dinnercam-backend --region asia-northeast1 --format 'value(status.url)'
 ```
 
-#### 7.3 フロントエンドデプロイ
+#### 8.2 フロントエンドデプロイ（Firebase Hosting）
+
+**Firebase Hosting設定:**
+
+```bash
+# Firebase CLIインストール
+npm install -g firebase-tools
+
+# Firebaseログイン
+firebase login
+
+# プロジェクト初期化
+cd frontend
+firebase init hosting
+
+# ビルドとデプロイ
+npm run build
+firebase deploy
+```
 
 **本番用環境変数設定** (`frontend/.env.production`):
 
@@ -570,9 +651,9 @@ vercel --prod
 # VITE_API_BASE_URL = https://your-backend-url.run.app
 ```
 
-### 8. トラブルシューティング
+### 9. トラブルシューティング
 
-#### 8.1 プロジェクトID関連エラー
+#### 9.1 プロジェクトID関連エラー
 
 ```bash
 # プロジェクトIDが正しく設定されているか確認
@@ -585,7 +666,7 @@ grep -r "PROJECT_ID" backend/agents/
 find backend/agents -name "*.py" -exec sed -i "s/ntr-dinnercam-461613/YOUR_ACTUAL_PROJECT_ID/g" {} \;
 ```
 
-#### 8.2 .env読み込みエラー
+#### 9.2 .env読み込みエラー
 
 ```bash
 # python-dotenvがインストールされているか確認
@@ -598,7 +679,7 @@ pip install python-dotenv
 grep -n "load_dotenv" backend/app/main.py
 ```
 
-#### 8.3 認証エラー
+#### 9.3 認証エラー
 
 ```bash
 # 認証状態確認
@@ -608,7 +689,7 @@ gcloud auth list
 gcloud auth application-default login
 ```
 
-#### 8.4 APIキーエラー
+#### 9.4 APIキーエラー
 
 ```bash
 # 環境変数確認
@@ -618,7 +699,7 @@ cat backend/.env | grep GOOGLE_API_KEY
 python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('API Key:', os.getenv('GOOGLE_API_KEY')[:10] + '...' if os.getenv('GOOGLE_API_KEY') else 'Not found')"
 ```
 
-#### 8.5 ポートエラー
+#### 9.5 ポートエラー
 
 ```bash
 # ポート使用状況確認
@@ -629,7 +710,7 @@ lsof -i :5173
 kill -9 <PID>
 ```
 
-#### 8.6 依存関係エラー
+#### 9.6 依存関係エラー
 
 ```bash
 # Pythonバージョン確認
@@ -643,25 +724,33 @@ pip install python-dotenv
 pip install -r requirements.txt
 ```
 
-### 9. 環境変数チェックリスト
+### 10. 環境変数チェックリスト
 
 **開発環境で必要な環境変数:**
 
 - ✅ `PROJECT_ID`: あなたのGCPプロジェクトID
 - ✅ `GOOGLE_API_KEY`: Google AI Studio APIキー
+- ✅ `GOOGLE_CLIENT_ID`: Google OAuthクライアントID
+- ✅ `JWT_SECRET_KEY`: JWT署名用秘密鍵
+- ✅ `FIREBASE_CREDENTIALS_PATH`: Firebaseサービスアカウントキー
 - ✅ `VITE_API_BASE_URL`: フロントエンド→バックエンド通信用
+- ✅ `REACT_APP_GOOGLE_CLIENT_ID`: フロントエンドOAuth用
 
 **本番環境で追加で必要:**
 
 - ✅ `CORS_ORIGINS`: 許可するオリジン
 - ✅ Cloud Runの環境変数設定
-- ✅ フロントエンドの本番URL設定
+- ✅ Firebase Hostingの本番URL設定
+- ✅ Firestoreセキュリティルール設定
 
 **確認済み事項:**
 
 - ✅ バックエンドの全PythonファイルでPROJECT_IDが変更済み
 - ✅ main.pyにpython-dotenvとload_dotenv()が追加済み
 - ✅ GCPでGemini APIが有効化済み
+- ✅ Firebaseプロジェクト作成・Authentication・Firestore有効化済み
+- ✅ Google OAuth クライアントID取得済み
+- ✅ Firebase サービスアカウントキー配置済み
 
 
 ## 🎮 使用方法
@@ -707,10 +796,12 @@ pip install -r requirements.txt
 ## 🔧 技術スタック
 
 ### フロントエンド
-- **React 18**: UIライブラリ
+- **React 19**: UIライブラリ
 - **Vite**: ビルドツール・開発サーバー
 - **Tailwind CSS**: CSSフレームワーク
 - **Marked**: Markdownレンダリング
+- **Google OAuth**: ユーザー認証
+- **JWT**: トークン管理
 
 ### バックエンド
 - **FastAPI**: Webフレームワーク
@@ -719,11 +810,16 @@ pip install -r requirements.txt
 - **Gemini Vision**: 画像理解
 - **Gemini Image Generation**: 画像生成
 - **LangChain**: AIエージェントフレームワーク
+- **Firebase Admin SDK**: 認証・データベース連携
+- **Google OAuth 2.0**: ユーザー認証
+- **JWT**: トークンベース認証
 
 ### インフラ
 - **Google Cloud Platform**: クラウドプラットフォーム
-- **Cloud Run**: コンテナデプロイメント（本番環境）
-- **Cloud Storage**: 画像ストレージ（オプション）
+- **Firebase**: 認証・データベース・ホスティング
+- **Firestore**: NoSQLデータベース
+- **Cloud Run**: コンテナデプロイメント（バックエンド）
+- **Firebase Hosting**: 静的サイトホスティング（フロントエンド）
 
 ## ⚡ パフォーマンス最適化
 
@@ -758,19 +854,23 @@ npm run test:e2e
 ## 📈 今後の拡張予定
 
 ### 短期目標
-- [ ] **データベース連携**: レシピ履歴・お気に入り機能
-- [ ] **ユーザー認証**: 個人化されたレコメンデーション
+- [x] **ユーザー認証**: Google OAuth 2.0による個人認証
+- [x] **データベース連携**: Firebase/Firestoreによる会話履歴・プロファイル保存
+- [x] **個人プロファイル**: 食事制限・調理スキル・健康目標管理
 - [ ] **レシピ共有**: SNS連携・URL共有
+- [ ] **お気に入り機能**: レシピブックマーク・評価システム
 
 ### 中期目標
 - [ ] **音声入力**: 「今日のおすすめは？」音声コマンド
 - [ ] **買い物リスト**: 不足食材の自動リストアップ
-- [ ] **カロリー管理**: 日々の栄養摂取追跡
+- [ ] **栄養トラッキング**: 日々の栄養摂取追跡・分析
+- [ ] **レシピ学習**: フィードバックによる推薦精度向上
 
 ### 長期目標
 - [ ] **IoT連携**: スマート冷蔵庫・調理器具との連携
 - [ ] **AR表示**: 調理手順のAR重畳表示
 - [ ] **多言語対応**: グローバル展開
+- [ ] **栄養士連携**: 専門家によるアドバイス機能
 
 ## 🤝 コントリビューション
 
