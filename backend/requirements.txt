@@ -1,0 +1,41 @@
+# ===== DinnerCam 最低限必要パッケージ =====
+
+# FastAPI関連
+fastapi>=0.115.0
+uvicorn>=0.34.0
+python-multipart>=0.0.20
+
+# Utilities
+python-dateutil>=2.8.2
+
+# 環境変数・設定
+python-dotenv>=1.0.0
+
+# Google Cloud / AI関連
+google-cloud-aiplatform>=1.97.0
+google-generativeai>=0.5.0
+google-genai>=1.20.0
+google-cloud-firestore>=2.13.1
+
+# Firebase Admin SDK（LINEスタイル会話永続化用）
+firebase-admin>=6.4.0
+
+# LangChain関連
+langchain>=0.3.0
+langchain-google-vertexai>=2.0.0
+
+# 認証関連
+python-jose[cryptography]>=3.5.0
+PyJWT>=2.8.0
+google-auth>=2.40.0
+google-oauth2-tool>=0.0.3
+google-auth-oauthlib
+google-auth-httplib2
+
+# HTTP通信
+httpx>=0.28.0
+requests>=2.31.0
+pydantic>=2.5.0
+
+# 画像処理
+pillow>=11.0.0
