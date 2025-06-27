@@ -1,9 +1,10 @@
 import vertexai
 from vertexai.generative_models import GenerativeModel
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, AsyncGenerator
 import json
 import re
 import os
+import asyncio
 from enum import Enum
 from agents.profile_extraction_agent import profile_extraction_agent
 
@@ -52,18 +53,39 @@ class ChatAgent:
         # テキストベースの意図分析
         prompt = f"""
 あなたは料理アシスタントの意図理解エキスパートです。
-ユーザーのメッセージを分析して、以下のカテゴリのどれに該当するか判定してください。
+ユーザーのメッセージを慎重に分析して、以下のカテゴリのどれに該当するか判定してください。
 
 ユーザーメッセージ: "{message}"
 
 意図カテゴリ:
 1. image_request: 冷蔵庫の写真を撮る/送ることに関する言及
-2. text_ingredients: 具体的な食材名を複数含んでいる
-3. recipe_request: 特定の料理名や調理法を求めている（例：「カレー作りたい」「うまい丼を作って」）
+2. text_ingredients: 具体的な食材名を複数含んでいて、かつレシピ生成を明確に求めている
+3. recipe_request: 特定の料理名や調理法を明確に求めている（例：「カレー作りたい」「パスタのレシピ教えて」）
 4. nutrition_advice: 栄養、健康、ダイエットに関する相談
 5. cooking_advice: 料理のコツ、時短、失敗対策などの質問
-6. casual_chat: 挨拶、感情表現、一般的な会話
+6. casual_chat: 挨拶、感情表現、一般的な会話、情報提供（人数、時間、好みなど）
 7. clarification: 不明確で詳細確認が必要
+
+**重要な判定基準**:
+- 単純な情報提供（「人数は○人です」「時間がない」など）は「casual_chat」
+- 料理への願望・欲求（「食べたい」「飲みたい」「美味しそう」など）は「recipe_request」
+- 料理作成の意図（「作りたい」「教えて」「作って」「レシピください」など）は「recipe_request」
+- 食材を使った料理提案の要求（「○○を使って」「○○で何か」など）は「text_ingredients」
+
+**casual_chatの例**:
+- 「人数は5人です」「時間がない」「今日は忙しい」「お腹すいた」
+- 「冷蔵庫にトマトがある」（使いたいという意図なし）
+- 一般的な挨拶や感情表現
+
+**recipe_requestの例**:
+- 「カレーを作りたい」「パスタのレシピを教えて」「チャーハンを作って」
+- 「韓国チゲが食べたいな」「ラーメンが飲みたい」「美味しいパスタが食べたい」
+- 「今日はカレー気分」「パスタの気分」「韓国料理が食べたいな」
+- 「チゲが美味しそうだな」「イタリア料理が食べたいなあ」
+
+**text_ingredientsの例**:
+- 「鶏肉でなにか作りたい」「トマトを使って何か作って」
+- 「これらの食材でレシピをお願いします」
 
 以下のJSON形式で回答してください：
 {{
@@ -75,7 +97,8 @@ class ChatAgent:
         "cooking_method": "調理法（炒める、煮る等）",
         "dietary_needs": "食事制限や目標",
         "time_constraint": "時間制約",
-        "difficulty_level": "難易度要求"
+        "difficulty_level": "難易度要求",
+        "context_info": "人数、時間、好みなどの文脈情報"
     }},
     "reasoning": "判定理由の簡潔な説明"
 }}
@@ -144,29 +167,89 @@ class ChatAgent:
         }
     
     def _detect_dish_name(self, text: str) -> str:
-        """料理名を検出"""
+        """料理名を検出（レシピ要求の意図がある場合のみ）"""
         dish_keywords = [
-            'カレー', 'ラーメン', 'うどん', 'そば', 'パスタ', 'チャーハン', 'オムライス',
+            # 日本料理
+            'カレー', 'ラーメン', 'うどん', 'そば', 'チャーハン', 'オムライス',
             '丼', 'どんぶり', '親子丼', '牛丼', '豚丼', 'カツ丼', '天丼',
             'ハンバーグ', '唐揚げ', '餃子', '焼肉', 'ステーキ', '肉じゃが',
             'サラダ', 'スープ', '味噌汁', '炒め物', '煮物', '焼き物',
-            '鍋', 'すき焼き', 'しゃぶしゃぶ', 'おでん', '寿司', '刺身'
+            '鍋', 'すき焼き', 'しゃぶしゃぶ', 'おでん', '寿司', '刺身',
+            # 国際料理・ジャンル
+            'パスタ', 'ピザ', 'リゾット', 'パエリア', 'タコス', 'ブリトー',
+            'チゲ', 'キムチ', 'ビビンバ', 'サムギョプサル', 'チャプチェ',
+            'トムヤムクン', 'パッタイ', 'グリーンカレー', 'ガパオ',
+            '麻婆豆腐', '回鍋肉', '青椒肉絲', '酢豚', '春巻き',
+            # 料理ジャンル
+            '韓国料理', '中華料理', 'イタリア料理', 'タイ料理', 'インド料理',
+            'フランス料理', 'メキシコ料理', '和食', '洋食', '中華'
         ]
         
-        for dish in dish_keywords:
-            if dish in text:
-                return dish
+        # レシピ要求を示すキーワード（願望表現も含む）
+        request_keywords = [
+            '作りたい', '作って', '教えて', 'レシピ', '作ろう', '作る',
+            'お願い', 'ください', '欲しい', '手伝って', '提案', '候補',
+            '食べたい', '飲みたい', '気分', '美味しい', '美味しそう'
+        ]
+        
+        # 自然な願望表現も検出（正規表現）
+        import re
+        desire_patterns = [
+            r'.*な$',    # 「韓国チゲが食べたいな」
+            r'.*なあ$',  # 「パスタが食べたいなあ」  
+            r'.*だな$',  # 「カレーが食べたいだな」
+            r'.*だね$',  # 「美味しそうだね」
+            r'.*気分$',  # 「パスタ気分」
+            r'.*したい', # 「○○したい」
+        ]
+        
+        has_request_intent = (
+            any(keyword in text for keyword in request_keywords) or
+            any(re.search(pattern, text) for pattern in desire_patterns)
+        )
+        
+        if has_request_intent:
+            for dish in dish_keywords:
+                if dish in text:
+                    return dish
         return ""
     
     def _extract_ingredients_simple(self, text: str) -> List[str]:
-        """簡易的な食材抽出"""
+        """簡易的な食材抽出（レシピ要求の意図がある場合のみ）"""
         common_ingredients = [
             '鶏肉', '豚肉', '牛肉', '魚', '卵', '牛乳', '豆腐', 'チーズ', '納豆',
             '玉ねぎ', 'にんじん', 'じゃがいも', 'キャベツ', 'レタス', 'トマト', 'きゅうり',
             '米', 'パン', 'パスタ', 'うどん', 'そば', '小麦粉', 'もやし', 'ピーマン',
             '醤油', '味噌', '塩', '砂糖', '酢', '油', 'バター', 'マヨネーズ', 'ケチャップ'
         ]
-        return [ingredient for ingredient in common_ingredients if ingredient in text]
+        
+        # レシピ要求を示すキーワードがある場合のみ食材を抽出（願望表現も含む）
+        request_keywords = [
+            '作りたい', '作って', '教えて', 'レシピ', '作ろう', '作る',
+            'お願い', 'ください', '欲しい', '手伝って', '提案', '候補',
+            '使って', '余って', 'ある', 'ため',
+            '食べたい', '飲みたい', '気分', '美味しい', '美味しそう'
+        ]
+        
+        # 自然な願望表現も検出（正規表現）
+        import re
+        desire_patterns = [
+            r'.*な$',    # 「韓国チゲが食べたいな」
+            r'.*なあ$',  # 「パスタが食べたいなあ」  
+            r'.*だな$',  # 「カレーが食べたいだな」
+            r'.*だね$',  # 「美味しそうだね」
+            r'.*気分$',  # 「パスタ気分」
+            r'.*したい', # 「○○したい」
+        ]
+        
+        has_request_intent = (
+            any(keyword in text for keyword in request_keywords) or
+            any(re.search(pattern, text) for pattern in desire_patterns)
+        )
+        
+        if has_request_intent:
+            return [ingredient for ingredient in common_ingredients if ingredient in text]
+        return []
     
     def _determine_response_type(self, intent: IntentType) -> str:
         """レスポンスタイプを決定"""
@@ -197,7 +280,7 @@ class ChatAgent:
         elif intent == IntentType.COOKING_ADVICE:
             return self._generate_cooking_advice_response(extracted_data)
         elif intent == IntentType.CASUAL_CHAT:
-            return self._generate_casual_response(context)
+            return self._generate_casual_response(extracted_data)
         else:  # CLARIFICATION
             return self._generate_clarification_response()
     
@@ -251,8 +334,14 @@ class ChatAgent:
         """料理相談のレスポンス"""
         return "料理のご相談ですね！👨‍🍳 具体的にどのようなことでお悩みでしょうか？食材やお困りの点を詳しく教えてください。"
     
-    def _generate_casual_response(self, context: List[Dict] = None) -> str:
-        """雑談レスポンス"""
+    def _generate_casual_response(self, extracted_data: Dict = None) -> str:
+        """雑談・情報提供レスポンス"""
+        if extracted_data and extracted_data.get("context_info"):
+            context_info = extracted_data.get("context_info")
+            # 文脈情報を受け取った場合の応答
+            return f"承知いたしました！{context_info}ですね。😊\n\n他に何か詳しい情報があれば教えてください。例えば：\n• 作りたい料理の種類\n• お手元にある食材\n• お好みや苦手なもの\n\nより具体的な提案ができるよう、お手伝いします！🍳"
+        
+        # 一般的な雑談の場合
         casual_responses = [
             "こんにちは！😊 今日のお食事について何かお手伝いできることはありますか？",
             "お疲れさまです！🍳 美味しい料理を一緒に作りましょう！",
@@ -277,6 +366,256 @@ class ChatAgent:
         # 履歴が長くなりすぎたら古いものを削除
         if len(self.conversation_context) > 10:
             self.conversation_context = self.conversation_context[-10:]
+    
+    # ===== 非同期メソッド（新機能） =====
+    
+    async def analyze_user_intent_async(self, message: str, has_image: bool = False) -> Dict[str, Any]:
+        """非同期版意図分析（後方互換性のため、同期版を流用）"""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self.analyze_user_intent, message, has_image
+        )
+    
+    async def generate_response_async(self, intent_result: Dict[str, Any]) -> str:
+        """非同期版レスポンス生成（後方互換性のため、同期版を流用）"""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self.generate_response, intent_result
+        )
+    
+    async def process_message_stream(
+        self, 
+        message: str, 
+        has_image: bool = False, 
+        user_id: str = None
+    ) -> AsyncGenerator[str, None]:
+        """統合ストリーミング処理 - ChatAgent中心型アーキテクチャの中核"""
+        try:
+            # Step 1: 意図理解
+            yield self._create_sse_data("status", "analyzing_intent")
+            intent_result = await self.analyze_user_intent_async(message, has_image)
+            yield self._create_sse_data("intent", {
+                "intent": intent_result["intent"].value,
+                "confidence": intent_result["confidence"],
+                "extracted_data": intent_result["extracted_data"]
+            })
+            
+            # Step 2: プロファイル情報を自動更新（ユーザーIDが提供されている場合）
+            if user_id:
+                profile_info = intent_result.get("profile_info", {})
+                if profile_info and profile_info.get("confidence", 0) > 0.3:
+                    # バックグラウンドで実行（レスポンスをブロックしない）
+                    asyncio.create_task(self._update_profile_from_conversation(user_id, profile_info))
+            
+            # Step 3: 応答生成
+            response = await self.generate_response_async(intent_result)
+            yield self._create_sse_data("chat_response", response)
+            
+            # Step 4: 必要に応じてレシピ生成を自動実行
+            if intent_result["intent"] in [IntentType.TEXT_INGREDIENTS, IntentType.RECIPE_REQUEST]:
+                yield self._create_sse_data("status", "starting_recipe_generation")
+                
+                # レシピ生成を自動実行
+                async for recipe_data in self._generate_recipe_automatically(intent_result, user_id):
+                    yield recipe_data
+            
+            # 会話コンテキストに追加
+            self.add_to_context(message, response)
+            
+            yield self._create_sse_data("complete", {"status": "success"})
+            
+        except Exception as e:
+            yield self._create_sse_data("error", {
+                "message": "申し訳ございません。エラーが発生しました。🙏",
+                "details": str(e)
+            })
+    
+    async def process_recipe_generation_stream(
+        self,
+        message: str,
+        has_image: bool = False,
+        user_id: str = None,
+        with_images: bool = False,
+        with_nutrition: bool = True
+    ) -> AsyncGenerator[str, None]:
+        """完全な統合レシピ生成ストリーミング処理"""
+        try:
+            # 他のエージェントをインポート（遅延インポートでサイクル参照回避）
+            from agents.recipe_agent import recipe_agent
+            from agents.nutrition_agent import nutrition_agent
+            from agents.generate_image_agent import image_agent
+            from agents.vision_agent import extract_ingredients_from_image
+            
+            # Step 1: 意図理解とプロファイル抽出
+            yield self._create_sse_data("status", "analyzing_intent")
+            intent_result = await self.analyze_user_intent_async(message, has_image)
+            yield self._create_sse_data("intent", {
+                "intent": intent_result["intent"].value,
+                "confidence": intent_result["confidence"],
+                "extracted_data": intent_result["extracted_data"]
+            })
+            
+            # Step 2: ユーザープロファイルを取得（user_idが提供されている場合）
+            user_preferences = {}
+            if user_id:
+                try:
+                    from services.profile_storage import profile_storage
+                    user_preferences = await profile_storage.get_user_preferences_summary(user_id)
+                except Exception:
+                    pass  # プロファイル取得エラーは無視
+            
+            # Step 3: 食材抽出（画像分析または意図から）
+            ingredients = []
+            dish_name = ""
+            extracted_data = intent_result.get("extracted_data", {})
+            
+            if has_image:
+                yield self._create_sse_data("status", "analyzing_image")
+                # 画像分析処理は同期的なので、非同期化
+                # ここは実際の画像パスが必要ですが、ひとまずプレースホルダー
+                yield self._create_sse_data("status", "image_analysis_complete")
+            else:
+                ingredients = extracted_data.get("ingredients", [])
+                dish_name = extracted_data.get("dish_name", "")
+            
+            # Step 4: レシピ生成
+            yield self._create_sse_data("status", "generating_recipe")
+            
+            if dish_name:
+                recipe = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.generate_recipe_from_dish_name,
+                    dish_name, {}, user_preferences
+                )
+            else:
+                recipe = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.generate_recipe_from_ingredients,
+                    ingredients, user_preferences
+                )
+            
+            yield self._create_sse_data("recipe", recipe)
+            
+            # Step 5: 栄養分析（並列処理可能）
+            nutrition_task = None
+            if with_nutrition:
+                yield self._create_sse_data("status", "analyzing_nutrition")
+                analysis_target = ingredients if ingredients else [dish_name] if dish_name else ["一般的な料理"]
+                nutrition_task = asyncio.get_event_loop().run_in_executor(
+                    None, nutrition_agent.analyze_recipe_nutrition,
+                    recipe, analysis_target
+                )
+            
+            # Step 6: 手順画像生成（並列処理可能）
+            image_tasks = []
+            if with_images:
+                yield self._create_sse_data("status", "preparing_image_generation")
+                steps_text = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.extract_steps_from_text, recipe
+                )
+                
+                for i, step in enumerate(steps_text):
+                    yield self._create_sse_data("generating_image", {
+                        "step_index": i,
+                        "step_text": step
+                    })
+                    image_tasks.append(image_agent.generate_single_image_async(step))
+            
+            # Step 7: 並列処理の結果を取得
+            if nutrition_task:
+                nutrition_data = await nutrition_task
+                yield self._create_sse_data("nutrition", nutrition_data)
+            
+            if image_tasks:
+                images = await asyncio.gather(*image_tasks, return_exceptions=True)
+                for i, (step, image_result) in enumerate(zip(steps_text, images)):
+                    if isinstance(image_result, Exception):
+                        yield self._create_sse_data("image_error", {
+                            "step_index": i,
+                            "step_text": step,
+                            "error": str(image_result)
+                        })
+                    else:
+                        yield self._create_sse_data("image", {
+                            "step_index": i,
+                            "step_text": step,
+                            "image_url": image_result
+                        })
+            
+            # Step 8: 会話履歴に追加
+            response = self.generate_response(intent_result)
+            self.add_to_context(message, response)
+            
+            yield self._create_sse_data("complete", {"status": "success"})
+            
+        except Exception as e:
+            yield self._create_sse_data("error", {
+                "message": "申し訳ございません。レシピ生成中にエラーが発生しました。🙏",
+                "details": str(e)
+            })
+    
+    async def _generate_recipe_automatically(self, intent_result: Dict[str, Any], user_id: str) -> AsyncGenerator[str, None]:
+        """レシピ生成を自動実行（簡易版）"""
+        try:
+            # 他のエージェントをインポート（遅延インポートでサイクル参照回避）
+            from agents.recipe_agent import recipe_agent
+            from agents.nutrition_agent import nutrition_agent
+            
+            extracted_data = intent_result.get("extracted_data", {})
+            ingredients = extracted_data.get("ingredients", [])
+            dish_name = extracted_data.get("dish_name", "")
+            
+            # ユーザープロファイルを取得
+            user_preferences = {}
+            if user_id:
+                try:
+                    from services.profile_storage import profile_storage
+                    user_preferences = await profile_storage.get_user_preferences_summary(user_id)
+                except Exception:
+                    pass  # プロファイル取得エラーは無視
+            
+            # Step 1: レシピ生成
+            yield self._create_sse_data("status", "generating_recipe")
+            
+            if dish_name:
+                recipe = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.generate_recipe_from_dish_name,
+                    dish_name, {}, user_preferences
+                )
+            else:
+                recipe = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.generate_recipe_from_ingredients,
+                    ingredients, user_preferences
+                )
+            
+            yield self._create_sse_data("recipe", recipe)
+            
+            # Step 2: 栄養分析
+            yield self._create_sse_data("status", "analyzing_nutrition")
+            analysis_target = ingredients if ingredients else [dish_name] if dish_name else ["一般的な料理"]
+            nutrition_data = await asyncio.get_event_loop().run_in_executor(
+                None, nutrition_agent.analyze_recipe_nutrition,
+                recipe, analysis_target
+            )
+            
+            yield self._create_sse_data("nutrition", nutrition_data)
+            yield self._create_sse_data("status", "recipe_generation_complete")
+            
+        except Exception as e:
+            yield self._create_sse_data("error", {
+                "message": f"レシピ生成中にエラーが発生しました: {str(e)}",
+                "details": str(e)
+            })
+    
+    async def _update_profile_from_conversation(self, user_id: str, profile_info: Dict[str, Any]):
+        """会話から抽出したプロファイル情報でユーザープロファイルを更新"""
+        try:
+            # main.pyのupdate_profile_from_conversation関数を呼び出し
+            from app.main import update_profile_from_conversation
+            await update_profile_from_conversation(user_id, profile_info)
+        except Exception as e:
+            print(f"[ERROR] ChatAgent プロファイル自動更新エラー: {e}")
+    
+    def _create_sse_data(self, event_type: str, data: Any) -> str:
+        """Server-Sent Events形式のデータを作成"""
+        import json
+        return f"data: {json.dumps({'type': event_type, 'content': data}, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 # シングルトンインスタンス
 chat_agent = ChatAgent()

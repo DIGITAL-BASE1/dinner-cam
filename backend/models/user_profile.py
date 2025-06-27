@@ -14,6 +14,9 @@ class DietaryRestriction(str, Enum):
     LOW_CARB = "low_carb"
     KETO = "keto"
     DIABETIC = "diabetic"
+    PALEO = "paleo"
+    MEDITERRANEAN = "mediterranean"
+    SUGAR_FREE = "sugar_free"
 
 class CookingSkillLevel(str, Enum):
     BEGINNER = "beginner"
@@ -32,6 +35,7 @@ class PreferredCuisine(str, Enum):
     MEXICAN = "mexican"
     AMERICAN = "american"
     MEDITERRANEAN = "mediterranean"
+    VIETNAMESE = "vietnamese"
 
 class MealType(str, Enum):
     BREAKFAST = "breakfast"
@@ -58,6 +62,13 @@ class UserProfile(BaseModel):
     favorite_ingredients: List[str] = Field(default_factory=list, description="好きな食材")
     spice_tolerance: Optional[int] = Field(3, ge=1, le=5, description="辛さ耐性 (1=苦手, 5=大好き)")
     sweetness_preference: Optional[int] = Field(3, ge=1, le=5, description="甘さ好み (1=控えめ, 5=甘め)")
+    
+    # 拡張プロファイル項目（会話から自動学習）
+    preferred_cooking_methods: List[str] = Field(default_factory=list, description="好みの調理方法")
+    taste_preferences: List[str] = Field(default_factory=list, description="味の好み（辛い、甘い、さっぱりなど）")
+    food_interests: List[str] = Field(default_factory=list, description="食べ物への関心（健康志向、グルメ、節約など）")
+    special_situations: List[str] = Field(default_factory=list, description="特別な状況（お弁当、パーティーなど）")
+    meal_timing_context: Optional[str] = Field(None, description="よく作る食事のタイミング")
     
     # 調理スキル・環境
     cooking_skill_level: Optional[CookingSkillLevel] = Field(CookingSkillLevel.BEGINNER, description="調理スキルレベル")
@@ -102,6 +113,13 @@ class UserProfileUpdate(BaseModel):
     protein_target: Optional[int] = None
     meal_timing_preferences: Optional[Dict[MealType, str]] = None
     frequent_meal_types: Optional[List[MealType]] = None
+    
+    # 拡張プロファイル項目（会話から自動学習）
+    preferred_cooking_methods: Optional[List[str]] = None
+    taste_preferences: Optional[List[str]] = None
+    food_interests: Optional[List[str]] = None
+    special_situations: Optional[List[str]] = None
+    meal_timing_context: Optional[str] = None
 
 class RecipeFeedback(BaseModel):
     recipe_id: str = Field(..., description="レシピID")

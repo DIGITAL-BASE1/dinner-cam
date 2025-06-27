@@ -20,7 +20,6 @@ from agents.recipe_agent import recipe_agent
 from agents.generate_image_agent import image_agent
 from agents.nutrition_agent import nutrition_agent
 from agents.chat_agent import chat_agent
-from orchestrator.handler import orchestrator
 
 # 認証関連
 from auth import google_auth, GoogleLoginRequest, get_current_user
@@ -389,6 +388,41 @@ async def update_profile_from_conversation(user_id: str, profile_info: Dict[str,
             if not new_dislikes.issubset(existing):
                 update_data["disliked_ingredients"] = list(existing | new_dislikes)
         
+        # === 新しい拡張項目の更新 ===
+        
+        if profile_info.get("favorite_ingredients"):
+            existing = set(current_profile.favorite_ingredients or [])
+            new_favorites = set(profile_info["favorite_ingredients"])
+            if not new_favorites.issubset(existing):
+                update_data["favorite_ingredients"] = list(existing | new_favorites)
+        
+        if profile_info.get("preferred_cooking_methods"):
+            existing = set(current_profile.preferred_cooking_methods or [])
+            new_methods = set(profile_info["preferred_cooking_methods"])
+            if not new_methods.issubset(existing):
+                update_data["preferred_cooking_methods"] = list(existing | new_methods)
+        
+        if profile_info.get("taste_preferences"):
+            existing = set(current_profile.taste_preferences or [])
+            new_tastes = set(profile_info["taste_preferences"])
+            if not new_tastes.issubset(existing):
+                update_data["taste_preferences"] = list(existing | new_tastes)
+        
+        if profile_info.get("food_interests"):
+            existing = set(current_profile.food_interests or [])
+            new_interests = set(profile_info["food_interests"])
+            if not new_interests.issubset(existing):
+                update_data["food_interests"] = list(existing | new_interests)
+        
+        if profile_info.get("special_situations"):
+            existing = set(current_profile.special_situations or [])
+            new_situations = set(profile_info["special_situations"])
+            if not new_situations.issubset(existing):
+                update_data["special_situations"] = list(existing | new_situations)
+        
+        if profile_info.get("meal_timing") and profile_info["meal_timing"] != current_profile.meal_timing_context:
+            update_data["meal_timing_context"] = profile_info["meal_timing"]
+        
         # 更新がある場合のみプロファイルを更新
         if update_data:
             from models.user_profile import UserProfileUpdate
@@ -411,7 +445,7 @@ async def chat_endpoint(payload: ChatMessage, current_user: dict = Depends(get_c
         
         # プロファイル情報を自動更新（非同期処理）
         profile_info = intent_result.get("profile_info", {})
-        if profile_info and profile_info.get("confidence", 0) > 0.7:
+        if profile_info and profile_info.get("confidence", 0) > 0.3:  # しきい値を下げて学習を強化
             # バックグラウンドで実行（レスポンスをブロックしない）
             import asyncio
             asyncio.create_task(update_profile_from_conversation(user_id, profile_info))
@@ -421,8 +455,7 @@ async def chat_endpoint(payload: ChatMessage, current_user: dict = Depends(get_c
             "intent": intent_result["intent"].value,
             "confidence": intent_result["confidence"],
             "response_type": intent_result["response_type"],
-            "extracted_data": intent_result["extracted_data"],
-# デバッグ用: プロファイル情報も返す（一時的）
+            "extracted_data": intent_result["extracted_data"]
         }
     except Exception as e:
         return {
@@ -770,42 +803,78 @@ async def get_cooking_stats(current_user: dict = Depends(get_current_user)):
     return stats
 
 
-# レガシーエンドポイント
-@app.post("/recipe")
-async def recipe_endpoint(payload: RecipeRequest):
-    recipe = recipe_agent.generate_recipe_from_ingredients(payload.ingredients)
-    result = {"recipe": recipe}
-    
-    if payload.with_nutrition:
-        nutrition_data = nutrition_agent.analyze_recipe_nutrition(recipe, payload.ingredients)
-        result["nutrition"] = nutrition_data
+# ===== 新しいChatAgent中心型エンドポイント =====
 
-    if not payload.with_images:
-        return result
+class ChatMessageV2(BaseModel):
+    message: str
+    has_image: bool = False
+    with_images: bool = False
+    with_nutrition: bool = True
 
-    steps_text = recipe_agent.extract_steps_from_text(recipe)
-    image_urls = image_agent.generate_images_for_steps(steps_text)
+@app.post("/chat/v2")
+@require_rate_limit()
+async def chat_v2_endpoint(
+    payload: ChatMessageV2, 
+    current_user: dict = Depends(get_current_user)
+):
+    """ChatAgent中心型の新しいチャットエンドポイント（シンプル版）"""
+    try:
+        user_id = current_user['id']
+        
+        return StreamingResponse(
+            chat_agent.process_message_stream(
+                payload.message, 
+                payload.has_image, 
+                user_id
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"ChatAgent処理でエラーが発生しました: {str(e)}"
+        )
 
-    steps = [
-        {"text": step, "image": image}
-        for step, image in zip(steps_text, image_urls)
-    ]
+@app.post("/chat/recipe/v2")
+@require_rate_limit(check_image_generation=True)
+async def chat_recipe_v2_endpoint(
+    payload: ChatMessageV2,
+    current_user: dict = Depends(get_current_user)
+):
+    """ChatAgent中心型の完全統合レシピ生成エンドポイント"""
+    try:
+        user_id = current_user['id']
+        
+        return StreamingResponse(
+            chat_agent.process_recipe_generation_stream(
+                payload.message,
+                payload.has_image,
+                user_id,
+                payload.with_images,
+                payload.with_nutrition
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"ChatAgent統合レシピ生成でエラーが発生しました: {str(e)}"
+        )
 
-    result["steps"] = steps
-    return result
 
-@app.post("/agent")
-async def agent_handler(prompt: dict):
-    result = orchestrator.run_agent(prompt["message"])
-    return {"result": result}
-
-@app.post("/agent/complete")
-async def agent_complete_recipe(payload: RecipeRequest):
-    result = await orchestrator.generate_complete_recipe_async(
-        payload.ingredients, 
-        payload.with_images
-    )
-    return result
+# レガシーエンドポイントは削除済み - ChatAgent v2に統合
 
 # ヘルスチェック
 @app.get("/health")

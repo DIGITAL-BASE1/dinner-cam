@@ -23,7 +23,6 @@ function AppContent() {
   
   const [currentRecipe, setCurrentRecipe] = useState(null);
   const [currentNutrition, setCurrentNutrition] = useState(null);
-  const [currentSteps, setCurrentSteps] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [streamingStatus, setStreamingStatus] = useState('');
   const [withImages, setWithImages] = useState(false);
@@ -325,7 +324,7 @@ function AppContent() {
     try {
       if (image) {
         console.log('[DEBUG] 画像処理ルート');
-        await handleImageAnalysis(image, message);
+        await handleImageAnalysis(image);
       } else {
         console.log('[DEBUG] テキスト処理ルート');
         await handleTextMessage(message);
@@ -342,7 +341,7 @@ function AppContent() {
     }
   };
 
-  const handleImageAnalysis = async (image, userMessage) => {
+  const handleImageAnalysis = async (image) => {
     const botMessageId = addMessage('bot', '冷蔵庫の写真を確認しています...📸');
 
     try {
@@ -377,25 +376,6 @@ function AppContent() {
       setShowIngredientCheck(true);
       setPendingImageMessageId(botMessageId);
 
-      try {
-        const chatResponse = await fetch(`${API_BASE_URL}/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getAuthHeaders()
-          },
-          body: JSON.stringify({
-            message: `冷蔵庫の写真から以下の食材が見つかりました: ${analyzeData.ingredients.join(', ')}`,
-            has_image: true
-          }),
-        });
-        
-        if (chatResponse.ok) {
-          const chatData = await chatResponse.json();
-        }
-      } catch (chatError) {
-        console.warn('ChatAgent通知エラー:', chatError);
-      }
 
     } catch (error) {
       updateMessage(botMessageId, {
@@ -415,7 +395,9 @@ function AppContent() {
       });
     }
     
-    await generateRecipeFromIngredients(selectedIngredients, "", {});
+    // 選択された食材でレシピ生成要求をv2エンドポイントに送信
+    const ingredientsMessage = `これらの食材でレシピを作ってください: ${selectedIngredients.join(', ')}`;
+    await processChatWithV2(ingredientsMessage);
     
     setDetectedIngredients([]);
     setPendingImageMessageId(null);
@@ -437,245 +419,14 @@ function AppContent() {
   };
 
   const handleTextMessage = async (message) => {
-    console.log('[DEBUG] handleTextMessage開始:', message);
+    console.log('[DEBUG] handleTextMessage開始 (ChatAgent v2):', message);
     
-    try {
-      console.log('[DEBUG] /chat リクエスト送信中...');
-
-      const chatResponse = await fetch(`${API_BASE_URL}/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify({
-          message: message,
-          has_image: false
-        }),
-      });
-
-      console.log('[DEBUG] /chat レスポンス受信:', chatResponse.status);
-      setStreamingStatus('');
-
-      if (chatResponse.status === 429) {
-        const errorData = await chatResponse.json();
-        addMessage('bot', errorData.detail.message);
-        fetchRateLimitStatus();
-        return;
-      }
-
-      if (!chatResponse.ok) throw new Error('チャット処理に失敗しました');
-      const chatData = await chatResponse.json();
-
-      console.log('[DEBUG] ChatAgent レスポンス:', chatData);
-
-      addMessage('bot', chatData.response);
-
-      await handleIntentAction(chatData, message);
-
-    } catch (error) {
-      console.error('[ERROR] チャット処理エラー:', error);
-      
-      if (!handleRateLimitError(error)) {
-        if (error.message.includes('時間がかかっています')) {
-          setStreamingStatus('');
-        } else {
-          addMessage('bot', '申し訳ございません。エラーが発生しました。もう一度お試しください。🙏');
-          setStreamingStatus('');
-        }
-      }
-    }
+    // 新しいChatAgent v2エンドポイントを使用
+    await processChatWithV2(message);
   };
 
-  const handleIntentAction = async (chatData, originalMessage) => {
-    console.log('[DEBUG] handleIntentAction呼び出し:', chatData);
-    
-    const { intent, response_type, extracted_data } = chatData;
-    
-    if (response_type === 'generate_recipe') {
-      const ingredients = extracted_data.ingredients || [];
-      const dishName = extracted_data.dish_name || "";
-      
-      console.log('[DEBUG] 抽出データ:', { ingredients, dishName });
-      console.log('[DEBUG] レシピ生成を実行 - ingredients:', ingredients, 'dishName:', dishName);
-      await generateRecipeFromIngredients(ingredients, dishName, extracted_data);
-    } else {
-      console.log('[DEBUG] レシピ生成以外:', response_type);
-    }
-  };
 
-  const generateRecipeFromIngredients = async (ingredients, dishName = "", preferences = {}) => {
-    console.log('[DEBUG] generateRecipeFromIngredients呼び出し:', { ingredients, dishName, preferences });
-    
-    const recipeMessageId = addMessage('bot', 'レシピを生成中です...👨‍🍳');
-    
-    // AbortControllerを作成
-    const abortController = new AbortController();
-    streamAbortControllerRef.current = abortController;
-    currentRecipeMessageIdRef.current = recipeMessageId;
-    setIsStreaming(true);
-    setStreamingStatus('レシピを生成中...');
 
-    try {
-      const requestBody = {
-        ingredients: ingredients,
-        dish_name: dishName,
-        preferences: preferences,
-        with_images: withImages,
-        with_nutrition: true,
-      };
-      
-      console.log('[DEBUG] /recipe/stream リクエストボディ:', requestBody);
-
-      const response = await fetch(`${API_BASE_URL}/recipe/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify(requestBody),
-        signal: abortController.signal,
-      });
-
-      if (response.status === 429) {
-        const errorData = await response.json();
-        updateMessage(recipeMessageId, {
-          content: errorData.detail.message
-        });
-        fetchRateLimitStatus();
-        return;
-      }
-
-      if (!response.ok) throw new Error('レシピ生成に失敗しました');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonString = line.slice(6).trim();
-            if (jsonString) {
-              try {
-                const data = JSON.parse(jsonString);
-                await handleStreamEvent(data, recipeMessageId);
-              } catch (e) {
-                console.error('JSON parse error:', e);
-              }
-            }
-          }
-        }
-      }
-
-      reader.releaseLock();
-      
-      fetchRateLimitStatus();
-
-    } catch (error) {
-      console.error('[ERROR] generateRecipeFromIngredients:', error);
-      
-      // AbortErrorの場合は停止メッセージを表示しない（stopStreaming()で処理済み）
-      if (error.name === 'AbortError') {
-        console.log('[INFO] ストリーミングが停止されました');
-        return;
-      }
-      
-      if (!handleRateLimitError(error)) {
-        updateMessage(recipeMessageId, {
-          content: 'レシピ生成に失敗しました。もう一度お試しください。😅'
-        });
-      }
-    } finally {
-      // ストリーミング状態をリセット
-      setIsStreaming(false);
-      setStreamingStatus('');
-      streamAbortControllerRef.current = null;
-      currentRecipeMessageIdRef.current = null;
-    }
-  };
-
-  const handleStreamEvent = async (data, recipeMessageId) => {
-    console.log('[DEBUG] handleStreamEvent:', data.type, data);
-    
-    switch (data.type) {
-      case 'recipe':
-        setCurrentRecipe(data.content);
-        updateMessage(recipeMessageId, {
-          content: 'レシピができました！🎉',
-          recipe: data.content
-        });
-        setStreamingStatus('栄養分析中...');
-        break;
-        
-      case 'nutrition':
-        setCurrentNutrition(data.content);
-        addMessage('bot', '栄養分析が完了しました！🥗', { nutritionData: data.content });
-        
-        if (withImages) {
-          setStreamingStatus('手順画像を生成中...');
-        } else {
-          setStreamingStatus('');
-        }
-        break;
-        
-      case 'generating_image':
-        if (withImages) {
-          setStreamingStatus(`画像生成中: ${data.step_index + 1}番目の手順`);
-        }
-        setCurrentSteps(prev => {
-          const newSteps = [...prev];
-          newSteps[data.step_index] = {
-            text: data.step_text,
-            image: null,
-            loading: true
-          };
-          return newSteps;
-        });
-        break;
-        
-      case 'image':
-        setCurrentSteps(prev => {
-          const newSteps = [...prev];
-          newSteps[data.step_index] = {
-            text: data.step_text,
-            image: data.image_url,
-            loading: false
-          };
-          return newSteps;
-        });
-        
-        if (withImages && data.image_url) {
-          addMessage('bot', '', { 
-            stepImage: {
-              stepNumber: data.step_index + 1,
-              text: data.step_text,
-              image: data.image_url
-            }
-          });
-        }
-        break;
-        
-      case 'complete':
-        setStreamingStatus('');
-        setTimeout(() => {
-          addMessage('bot', '完成です！🎊 何か他にご質問はありますか？');
-        }, 500);
-        break;
-        
-      case 'error':
-        setStreamingStatus('');
-        addMessage('bot', `エラーが発生しました: ${data.message || '不明なエラー'}`);
-        break;
-    }
-  };
 
   // 会話クリア機能（LINEスタイル用）
   const clearConversation = async () => {
@@ -701,6 +452,159 @@ function AppContent() {
         console.error('[ERROR] 会話クリアエラー:', error);
         alert('会話のクリアに失敗しました');
       }
+    }
+  };
+
+  // ===== ChatAgent v2 統合チャット処理 =====
+  
+  const processChatWithV2 = async (message) => {
+    console.log('[DEBUG] ChatAgent v2 processing message:', message);
+    
+    const messageId = addMessage('bot', '処理中...🔄');
+    
+    // AbortControllerを作成
+    const abortController = new AbortController();
+    streamAbortControllerRef.current = abortController;
+    setIsStreaming(true);
+    setStreamingStatus('処理中...');
+
+    try {
+      const requestBody = {
+        message: message,
+        has_image: false,
+        with_images: withImages,
+        with_nutrition: true,
+      };
+      
+      console.log('[DEBUG] /chat/v2 リクエストボディ:', requestBody);
+
+      const response = await fetch(`${API_BASE_URL}/chat/v2`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify(requestBody),
+        signal: abortController.signal,
+      });
+
+      if (response.status === 429) {
+        const errorData = await response.json();
+        updateMessage(messageId, {
+          content: errorData.detail.message
+        });
+        fetchRateLimitStatus();
+        return;
+      }
+
+      if (!response.ok) throw new Error('チャット処理に失敗しました');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonString = line.slice(6).trim();
+            if (jsonString) {
+              try {
+                const data = JSON.parse(jsonString);
+                await handleChatV2StreamEvent(data, messageId);
+              } catch (e) {
+                console.error('JSON parse error in /chat/v2:', e);
+              }
+            }
+          }
+        }
+      }
+
+      reader.releaseLock();
+      fetchRateLimitStatus();
+
+    } catch (error) {
+      console.error('[ERROR] testChatV2Endpoint:', error);
+      
+      if (error.name === 'AbortError') {
+        console.log('[INFO] ストリーミングが停止されました');
+        return;
+      }
+      
+      updateMessage(messageId, {
+        content: 'チャット処理に失敗しました。もう一度お試しください。😅'
+      });
+    } finally {
+      setIsStreaming(false);
+      setStreamingStatus('');
+      streamAbortControllerRef.current = null;
+    }
+  };
+
+  // ChatAgent v2 ストリーミングイベントのハンドラー
+  const handleChatV2StreamEvent = async (data, messageId) => {
+    console.log('[DEBUG] handleChatV2StreamEvent:', data.type, data);
+    
+    switch (data.type) {
+      case 'status':
+        setStreamingStatus(data.content);
+        break;
+        
+      case 'intent':
+        console.log('[DEBUG] ChatAgent v2 意図解析:', data.content);
+        updateMessage(messageId, {
+          content: `意図解析結果: ${data.content.intent} (信頼度: ${Math.round(data.content.confidence * 100)}%)`
+        });
+        break;
+        
+      case 'chat_response':
+        updateMessage(messageId, {
+          content: data.content
+        });
+        break;
+        
+      case 'recipe':
+        setCurrentRecipe(data.content);
+        updateMessage(messageId, {
+          content: 'レシピができました！🎉',
+          recipe: data.content
+        });
+        break;
+        
+      case 'nutrition':
+        setCurrentNutrition(data.content);
+        addMessage('bot', '栄養分析が完了しました！🥗', { nutritionData: data.content });
+        break;
+        
+      case 'suggestion':
+        if (data.content.type === 'recipe_generation') {
+          addMessage('bot', `💡 ${data.content.message}`, { 
+            suggestion: data.content,
+            extracted_data: data.content.extracted_data 
+          });
+        }
+        break;
+        
+      case 'complete':
+        setStreamingStatus('');
+        console.log('[DEBUG] 処理完了:', data.content);
+        break;
+        
+      case 'error':
+        updateMessage(messageId, {
+          content: `❌ エラー: ${data.content.message}`
+        });
+        console.error('[ERROR] チャット処理:', data.content);
+        break;
+        
+      default:
+        console.log('[DEBUG] Unknown ChatAgent v2 event type:', data.type, data);
     }
   };
 

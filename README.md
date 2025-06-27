@@ -115,7 +115,7 @@ dinnercam-ai-agents/
 │   ├── package.json
 │   └── vite.config.js
 ├── backend/                  # FastAPI バックエンド
-│   ├── agents/              # AIエージェント群
+│   ├── **agents**/              # AIエージェント群
 │   │   ├── chat_agent.py           # 意図理解・会話管理
 │   │   ├── vision_agent.py         # 画像解析・食材抽出
 │   │   ├── recipe_agent.py         # レシピ生成
