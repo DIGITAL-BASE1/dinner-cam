@@ -825,7 +825,9 @@ async def chat_v2_endpoint(
             chat_agent.process_message_stream(
                 payload.message, 
                 payload.has_image, 
-                user_id
+                user_id,
+                payload.with_images,
+                payload.with_nutrition
             ),
             media_type="text/event-stream",
             headers={

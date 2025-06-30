@@ -582,6 +582,24 @@ function AppContent() {
         addMessage('bot', '栄養分析が完了しました！🥗', { nutritionData: data.content });
         break;
         
+      case 'generating_image':
+        setStreamingStatus(`手順${data.content.step_index + 1}の画像を生成中...🖼️`);
+        break;
+        
+      case 'image':
+        addMessage('bot', `手順${data.content.step_index + 1}の画像ができました！`, { 
+          stepImage: {
+            step_index: data.content.step_index,
+            step_text: data.content.step_text,
+            image_url: data.content.image_url
+          }
+        });
+        break;
+        
+      case 'image_error':
+        addMessage('bot', `⚠️ 手順${data.content.step_index + 1}の画像生成に失敗しました: ${data.content.step_text}`);
+        break;
+        
       case 'suggestion':
         if (data.content.type === 'recipe_generation') {
           addMessage('bot', `💡 ${data.content.message}`, { 

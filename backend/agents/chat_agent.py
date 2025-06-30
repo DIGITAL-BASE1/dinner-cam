@@ -385,7 +385,9 @@ class ChatAgent:
         self, 
         message: str, 
         has_image: bool = False, 
-        user_id: str = None
+        user_id: str = None,
+        with_images: bool = False,
+        with_nutrition: bool = True
     ) -> AsyncGenerator[str, None]:
         """統合ストリーミング処理 - ChatAgent中心型アーキテクチャの中核"""
         try:
@@ -413,8 +415,8 @@ class ChatAgent:
             if intent_result["intent"] in [IntentType.TEXT_INGREDIENTS, IntentType.RECIPE_REQUEST]:
                 yield self._create_sse_data("status", "starting_recipe_generation")
                 
-                # レシピ生成を自動実行
-                async for recipe_data in self._generate_recipe_automatically(intent_result, user_id):
+                # レシピ生成を自動実行（画像生成・栄養分析対応）
+                async for recipe_data in self._generate_recipe_automatically(intent_result, user_id, with_images, with_nutrition):
                     yield recipe_data
             
             # 会話コンテキストに追加
@@ -550,8 +552,8 @@ class ChatAgent:
                 "details": str(e)
             })
     
-    async def _generate_recipe_automatically(self, intent_result: Dict[str, Any], user_id: str) -> AsyncGenerator[str, None]:
-        """レシピ生成を自動実行（簡易版）"""
+    async def _generate_recipe_automatically(self, intent_result: Dict[str, Any], user_id: str, with_images: bool = False, with_nutrition: bool = True) -> AsyncGenerator[str, None]:
+        """レシピ生成を自動実行（画像生成・栄養分析対応版）"""
         try:
             # 他のエージェントをインポート（遅延インポートでサイクル参照回避）
             from agents.recipe_agent import recipe_agent
@@ -586,15 +588,53 @@ class ChatAgent:
             
             yield self._create_sse_data("recipe", recipe)
             
-            # Step 2: 栄養分析
-            yield self._create_sse_data("status", "analyzing_nutrition")
-            analysis_target = ingredients if ingredients else [dish_name] if dish_name else ["一般的な料理"]
-            nutrition_data = await asyncio.get_event_loop().run_in_executor(
-                None, nutrition_agent.analyze_recipe_nutrition,
-                recipe, analysis_target
-            )
+            # Step 2: 栄養分析（並列処理可能）
+            nutrition_task = None
+            if with_nutrition:
+                yield self._create_sse_data("status", "analyzing_nutrition")
+                analysis_target = ingredients if ingredients else [dish_name] if dish_name else ["一般的な料理"]
+                nutrition_task = asyncio.get_event_loop().run_in_executor(
+                    None, nutrition_agent.analyze_recipe_nutrition,
+                    recipe, analysis_target
+                )
             
-            yield self._create_sse_data("nutrition", nutrition_data)
+            # Step 3: 手順画像生成（並列処理可能）
+            image_tasks = []
+            if with_images:
+                from agents.generate_image_agent import image_agent
+                yield self._create_sse_data("status", "preparing_image_generation")
+                steps_text = await asyncio.get_event_loop().run_in_executor(
+                    None, recipe_agent.extract_steps_from_text, recipe
+                )
+                
+                for i, step in enumerate(steps_text):
+                    yield self._create_sse_data("generating_image", {
+                        "step_index": i,
+                        "step_text": step
+                    })
+                    image_tasks.append(image_agent.generate_single_image_async(step))
+            
+            # Step 4: 並列処理の結果を取得
+            if nutrition_task:
+                nutrition_data = await nutrition_task
+                yield self._create_sse_data("nutrition", nutrition_data)
+            
+            if image_tasks:
+                images = await asyncio.gather(*image_tasks, return_exceptions=True)
+                for i, (step, image_result) in enumerate(zip(steps_text, images)):
+                    if isinstance(image_result, Exception):
+                        yield self._create_sse_data("image_error", {
+                            "step_index": i,
+                            "step_text": step,
+                            "error": str(image_result)
+                        })
+                    else:
+                        yield self._create_sse_data("image", {
+                            "step_index": i,
+                            "step_text": step,
+                            "image_url": image_result
+                        })
+            
             yield self._create_sse_data("status", "recipe_generation_complete")
             
         except Exception as e:

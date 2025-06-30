@@ -201,14 +201,14 @@ export function ChatMessage({ message }) {
               {/* 修正：Markdownをレンダリングして表示 */}
               <div 
                 className="mb-3 text-sm text-gray-700 bg-white p-3 rounded-md shadow-sm prose prose-sm max-w-none"
-                dangerouslySetInnerHTML={{ __html: marked.parse(message.stepImage.text) }}
+                dangerouslySetInnerHTML={{ __html: marked.parse(message.stepImage.step_text || '') }}
               />
               
-              {message.stepImage.image && (
+              {message.stepImage.image_url && (
                 <div className="bg-white p-2 rounded-md shadow-sm">
                   <img
-                    src={message.stepImage.image}
-                    alt={`手順${message.stepImage.stepNumber}`}
+                    src={message.stepImage.image_url}
+                    alt={`手順${message.stepImage.step_index + 1}`}
                     className="w-full rounded border object-cover"
                     style={{ maxHeight: '400px' }}
                   />
